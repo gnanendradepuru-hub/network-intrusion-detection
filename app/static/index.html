@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flow watch · network intrusion detection</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --fog: #eef1f4;
+    --panel: #ffffff;
+    --ink: #14213d;
+    --muted: #5c6b7a;
+    --rule: #d5dce3;
+    --normal: #a9b8c4;
+    --dos: #d1344b;
+    --probe: #e09f1f;
+    --r2l: #2a6f97;
+    --u2r: #6d3fa0;
+    --good: #2a9d8f;
+    --focus: #14213d;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fog: #121a26; --panel: #1b2636; --ink: #e8edf3; --muted: #93a3b4; --rule: #2b3a4e;
+      --normal: #4d6178; --dos: #ff6b81; --probe: #f0b84a; --r2l: #5fb0dd; --u2r: #b48cf0;
+      --good: #4cc3b4; --focus: #e8edf3; color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--fog); color: var(--ink);
+    font: 15px/1.5 "Public Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  header { padding: 22px 28px 8px; display: flex; flex-wrap: wrap; gap: 12px 32px; align-items: baseline; }
+  h1 { font-size: 22px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 14px; }
+  main { padding: 8px 28px 40px; display: grid; gap: 18px; grid-template-columns: minmax(0, 1.6fr) minmax(300px, 1fr); }
+  @media (max-width: 960px) { main { grid-template-columns: 1fr; padding: 8px 16px 32px; } header { padding: 18px 16px 8px; } }
+  section { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 18px 20px; min-width: 0; }
+  h2 { font-size: 15px; font-weight: 600; margin: 0 0 12px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin-bottom: 14px; }
+  button {
+    font: inherit; font-weight: 600; color: var(--panel); background: var(--ink);
+    border: 0; border-radius: 4px; padding: 8px 14px; cursor: pointer;
+  }
+  button.quiet { background: transparent; color: var(--ink); border: 1px solid var(--rule); }
+  button:disabled { opacity: .55; cursor: progress; }
+  label { color: var(--muted); font-size: 14px; display: inline-flex; align-items: center; gap: 8px; }
+  input[type=range] { accent-color: var(--ink); width: 130px; }
+  .tally { display: flex; flex-wrap: wrap; gap: 6px 20px; margin: 0 0 14px; font-size: 14px; }
+  .tally span b { font-variant-numeric: tabular-nums; }
+  .chip { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+
+  /* The traffic ribbon: one bar per flow, height = P(attack). */
+  .ribbon { display: flex; align-items: flex-end; gap: 1px; height: 104px; border-bottom: 1px solid var(--rule); padding-bottom: 1px; position: relative; }
+  .ribbon button { flex: 1 1 0; min-width: 2px; padding: 0; border-radius: 1px 1px 0 0; background: var(--normal); }
+  .ribbon button[aria-pressed=true] { outline: 2px solid var(--ink); outline-offset: 1px; z-index: 1; }
+  .thr { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--muted); pointer-events: none; }
+  .thr em { position: absolute; right: 0; top: -18px; font-style: normal; font-size: 12px; color: var(--muted); background: var(--panel); padding-left: 4px; }
+  .axis { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 18px; font-size: 14px; }
+  th { text-align: left; font-weight: 600; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--rule); }
+  td { padding: 7px 8px; border-bottom: 1px solid var(--rule); font-variant-numeric: tabular-nums; }
+  tr.row { cursor: pointer; }
+  tr.row:hover td, tr.row[aria-selected=true] td { background: color-mix(in srgb, var(--ink) 7%, transparent); }
+  .scroll { overflow-x: auto; max-height: 360px; overflow-y: auto; }
+  .tag { font-weight: 600; }
+  .miss { color: var(--dos); font-weight: 600; }
+  .ok { color: var(--good); font-weight: 600; }
+
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0 0 16px; font-size: 14px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .bars { display: grid; gap: 6px; margin: 0 0 16px; }
+  .bar { display: grid; grid-template-columns: 64px 1fr 48px; gap: 8px; align-items: center; font-size: 13px; }
+  .bar .track { height: 8px; background: color-mix(in srgb, var(--ink) 9%, transparent); border-radius: 2px; overflow: hidden; }
+  .bar .fill { height: 100%; }
+  .why { display: grid; gap: 8px; }
+  .why .item { display: grid; grid-template-columns: minmax(0, 1fr) 90px; gap: 10px; align-items: center; font-size: 13px; }
+  .why .f { overflow-wrap: anywhere; }
+  .why .f small { color: var(--muted); }
+  .div { position: relative; height: 10px; background: color-mix(in srgb, var(--ink) 9%, transparent); border-radius: 2px; }
+  .div i { position: absolute; top: 0; bottom: 0; background: var(--dos); border-radius: 2px; }
+  .div::after { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; border-left: 1px solid var(--muted); }
+  .note { color: var(--muted); font-size: 13px; }
+  .empty { color: var(--muted); padding: 8px 0; }
+  .err { color: var(--dos); font-weight: 600; }
+  .metrics { margin-top: 18px; font-size: 13px; }
+  .metrics img { max-width: 100%; border-radius: 4px; border: 1px solid var(--rule); background: #fff; }
+  details { margin-top: 14px; }
+  summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+  @media (prefers-reduced-motion: no-preference) { .bar .fill { transition: width .25s ease; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Flow watch</h1>
+  <span class="sub" id="model">Loading model…</span>
+</header>
+
+<main>
+  <section aria-labelledby="stream-h">
+    <h2 id="stream-h">Replayed traffic</h2>
+    <div class="controls">
+      <button id="replay">Replay new traffic</button>
+      <label>Alert at P(attack) ≥ <input type="range" id="thr" min="0.1" max="0.95" step="0.05" value="0.5" aria-describedby="thrv"><output id="thrv">0.50</output></label>
+      <span class="note">Held-out KDDTest+ flows, including attack types the model never saw in training.</span>
+    </div>
+    <p class="tally" id="tally" aria-live="polite"></p>
+    <div class="ribbon" id="ribbon" role="group" aria-label="Flows in arrival order. Bar height is attack probability."></div>
+    <div class="axis"><span>first flow</span><span>last flow</span></div>
+    <div id="msg" class="err" role="alert"></div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Flow</th><th>Alert</th><th>P(attack)</th><th>Service</th><th>Actual</th><th>Result</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="insp-h">
+    <h2 id="insp-h">Flow inspector</h2>
+    <div id="inspector"><p class="empty">Select a bar or a row to see why a flow was flagged.</p></div>
+    <details class="metrics" id="offline">
+      <summary>Offline test results</summary>
+      <div id="offline-body"></div>
+    </details>
+  </section>
+</main>
+
+<script>
+const FAMILY_VAR = { normal: "--normal", dos: "--dos", probe: "--probe", r2l: "--r2l", u2r: "--u2r" };
+const FAMILY_NAME = { normal: "Normal", dos: "Denial of service", probe: "Probe", r2l: "Remote-to-local", u2r: "User-to-root" };
+const FEATURE_HELP = {
+  same_srv_rate: "Share of recent connections hitting the same service",
+  dst_host_srv_count: "Connections to this service on the target host",
+  dst_host_same_srv_rate: "Share of target-host connections to the same service",
+  serror_rate: "Share of recent connections with SYN errors",
+  srv_serror_rate: "SYN-error share on the same service",
+  dst_host_serror_rate: "SYN-error share on the target host",
+  dst_host_srv_serror_rate: "SYN-error share, same service on target host",
+  mean_error_rate: "Average of the four SYN/REJ error rates",
+  host_error_rate: "Average error rate across the target host",
+  logged_in: "Whether the login succeeded",
+  src_bytes: "Bytes sent by the source", dst_bytes: "Bytes sent back",
+  log_src_bytes: "Bytes sent by the source (log scale)", log_dst_bytes: "Bytes sent back (log scale)",
+  bytes_ratio: "Source-to-destination byte ratio (log)",
+  count: "Connections to the same host in the last 2 s",
+  srv_count: "Connections to the same service in the last 2 s",
+  dst_host_count: "Connections to the target host", diff_srv_rate: "Share of recent connections hitting different services",
+  is_error_flag: "TCP flag shows a failed connection"
+};
+let data = [], selected = -1;
+const $ = id => document.getElementById(id);
+const color = fam => getComputedStyle(document.documentElement).getPropertyValue(FAMILY_VAR[fam] || "--normal");
+const pct = x => (x * 100).toFixed(1) + "%";
+
+function prettyFeature(f) {
+  if (f.startsWith("service_")) return `Service is “${f.slice(8)}”`;
+  if (f.startsWith("flag_")) return `TCP flag is ${f.slice(5)}`;
+  if (f.startsWith("protocol_type_")) return `Protocol is ${f.slice(14).toUpperCase()}`;
+  return f;
+}
+
+async function replay() {
+  const btn = $("replay"); btn.disabled = true; $("msg").textContent = "";
+  try {
+    const r = await fetch(`/api/replay?n=150&threshold=${$("thr").value}`);
+    if (!r.ok) throw new Error(`Server returned ${r.status}`);
+    const j = await r.json();
+    data = j.results; $("model").textContent = `Model: ${j.model}`;
+    selected = -1; render();
+    $("inspector").innerHTML = '<p class="empty">Select a bar or a row to see why a flow was flagged.</p>';
+  } catch (e) {
+    $("msg").textContent = `Could not score traffic: ${e.message}. Is the API running?`;
+  } finally { btn.disabled = false; }
+}
+
+function verdict(d) {
+  const attack = d.true_family !== "normal";
+  if (d.alert && attack) return d.predicted === d.true_family ? ["Caught", "ok"] : ["Caught, wrong type", "ok"];
+  if (d.alert && !attack) return ["False alarm", "miss"];
+  if (!d.alert && attack) return ["Missed", "miss"];
+  return ["Clear", ""];
+}
+
+function render() {
+  const tp = data.filter(d => d.alert && d.true_family !== "normal").length;
+  const fp = data.filter(d => d.alert && d.true_family === "normal").length;
+  const fn = data.filter(d => !d.alert && d.true_family !== "normal").length;
+  const atk = data.filter(d => d.true_family !== "normal").length;
+  $("tally").innerHTML =
+    `<span><b>${data.length}</b> flows</span><span><b>${data.filter(d => d.alert).length}</b> alerts</span>` +
+    `<span><b>${tp}</b> of <b>${atk}</b> real attacks caught</span>` +
+    `<span><b>${fp}</b> false alarms</span><span><b>${fn}</b> missed</span>`;
+
+  const rb = $("ribbon"); rb.innerHTML = "";
+  const thrLine = document.createElement("div"); thrLine.className = "thr";
+  thrLine.style.bottom = `${$("thr").value * 100}%`; thrLine.innerHTML = `<em>alert threshold</em>`;
+  rb.appendChild(thrLine);
+  data.forEach((d, i) => {
+    const b = document.createElement("button");
+    b.style.height = `${Math.max(4, d.attack_score * 100)}%`;
+    b.style.background = color(d.alert ? d.predicted : "normal");
+    b.setAttribute("aria-pressed", i === selected);
+    b.setAttribute("aria-label", `Flow ${i + 1}: ${d.alert ? d.predicted + " alert" : "clear"}, attack probability ${pct(d.attack_score)}`);
+    b.onclick = () => select(i);
+    rb.appendChild(b);
+  });
+
+  const order = data.map((d, i) => i).filter(i => data[i].alert || data[i].true_family !== "normal")
+    .sort((a, b) => data[b].attack_score - data[a].attack_score);
+  $("rows").innerHTML = order.slice(0, 80).map(i => {
+    const d = data[i], [v, cls] = verdict(d);
+    return `<tr class="row" tabindex="0" data-i="${i}" aria-selected="${i === selected}">
+      <td>#${i + 1}</td>
+      <td>${d.alert ? `<span class="chip" style="background:${color(d.predicted)}"></span><span class="tag">${FAMILY_NAME[d.predicted]}</span>` : "—"}</td>
+      <td>${pct(d.attack_score)}</td><td>${d.flow.service}</td>
+      <td>${d.true_attack}</td><td class="${cls}">${v}</td></tr>`;
+  }).join("") || `<tr><td colspan="6" class="empty">No alerts or attacks in this batch.</td></tr>`;
+  document.querySelectorAll("tr.row").forEach(tr => {
+    tr.onclick = () => select(+tr.dataset.i);
+    tr.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(+tr.dataset.i); } };
+  });
+}
+
+function select(i) {
+  selected = i; const d = data[i], [v, cls] = verdict(d);
+  document.querySelectorAll("#ribbon button").forEach((b, k) => b.setAttribute("aria-pressed", k === i));
+  document.querySelectorAll("tr.row").forEach(tr => tr.setAttribute("aria-selected", +tr.dataset.i === i));
+  const probs = Object.entries(d.probabilities).sort((a, b) => b[1] - a[1]).map(([c, p]) =>
+    `<div class="bar"><span>${c}</span><div class="track"><div class="fill" style="width:${p * 100}%;background:${color(c)}"></div></div><span>${pct(p)}</span></div>`).join("");
+  let why = '<p class="note">Reasons are shown for flows that raise an alert.</p>';
+  if (d.reasons) {
+    const mx = Math.max(...d.reasons.map(r => Math.abs(r.impact)), 1e-6);
+    why = `<div class="why">` + d.reasons.map(r => {
+      const w = Math.abs(r.impact) / mx * 50;
+      const left = r.impact >= 0 ? 50 : 50 - w;
+      const help = FEATURE_HELP[r.feature] ? `<br><small>${FEATURE_HELP[r.feature]}</small>` : "";
+      return `<div class="item"><div class="f">${prettyFeature(r.feature)} = ${Number(r.value.toFixed(3))}${help}</div>
+        <div class="div" title="${r.impact >= 0 ? "Pushes toward" : "Pushes away from"} ${d.predicted}"><i style="left:${left}%;width:${w}%;background:${r.impact >= 0 ? "var(--dos)" : "var(--good)"}"></i></div></div>`;
+    }).join("") + `</div><p class="note">Red pushes toward “${d.predicted}”, green pushes away (SHAP values).</p>`;
+  }
+  const f = d.flow;
+  $("inspector").innerHTML = `
+    <p><span class="tag">${d.alert ? FAMILY_NAME[d.predicted] + " alert" : "No alert"}</span> · <span class="${cls}">${v}</span></p>
+    <dl class="kv">
+      <dt>Actual</dt><dd>${d.true_attack} (${d.true_family})</dd>
+      <dt>Protocol / service</dt><dd>${f.protocol_type.toUpperCase()} / ${f.service}</dd>
+      <dt>TCP flag</dt><dd>${f.flag}</dd>
+      <dt>Bytes out / in</dt><dd>${f.src_bytes.toLocaleString()} / ${f.dst_bytes.toLocaleString()}</dd>
+      <dt>Recent conns (host / service)</dt><dd>${f.count} / ${f.srv_count}</dd>
+      <dt>SYN error rate</dt><dd>${pct(f.serror_rate)}</dd>
+    </dl>
+    <h2>Class probabilities</h2><div class="bars">${probs}</div>
+    <h2>Why it was flagged</h2>${why}`;
+}
+
+async function loadOffline() {
+  try {
+    const r = await (await fetch("/api/results")).json(), s = r.selected_test, b = s.binary;
+    const rows = r.classes.map(c => { const m = s.per_class[c];
+      return `<tr><td>${c}</td><td>${m.precision.toFixed(2)}</td><td>${m.recall.toFixed(2)}</td><td>${m.f1.toFixed(2)}</td><td>${m.support}</td></tr>`; }).join("");
+    $("offline-body").innerHTML = `
+      <p>Attack-vs-normal: precision ${b.precision.toFixed(3)}, recall ${b.recall.toFixed(3)}, false-alarm rate ${pct(b.false_alarm_rate)}.
+      Detection of attack types unseen in training: <b>${pct(s.detection_rate_novel_attacks)}</b> (seen types: ${pct(s.detection_rate_known_attacks)}).</p>
+      <div class="scroll"><table><thead><tr><th>Class</th><th>Precision</th><th>Recall</th><th>F1</th><th>Flows</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p><img src="/artifacts/confusion_matrix.png" alt="Confusion matrix on the test set"></p>
+      <p><img src="/artifacts/shap_global.png" alt="Global SHAP feature importance by attack class"></p>`;
+  } catch { $("offline-body").textContent = "Run src/train.py to generate offline results."; }
+}
+
+$("thr").oninput = e => { $("thrv").textContent = (+e.target.value).toFixed(2); };
+$("thr").onchange = replay;
+$("replay").onclick = replay;
+loadOffline(); replay();
+</script>
+</body>
+</html>
